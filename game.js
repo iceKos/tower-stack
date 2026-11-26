@@ -1,13 +1,9 @@
 'use strict';
 
-const ROUND_COUNT = 3;
-const ROUND_MS = 90_000;
-const FLOOR_HEIGHT = 44;
-const BASE_WIDTH = 348;
-const PERFECT_MARGIN = 8;
+const { roundCount: ROUND_COUNT, roundMs: ROUND_MS, floorHeight: FLOOR_HEIGHT,
+  baseWidth: BASE_WIDTH, dropMs: DROP_MS } = stackRules;
 const PERFECT_EFFECT_MS = 760;
 const DROP_DISTANCE = 132;
-const DROP_MS = 210;
 const SITES = [
   { id: 'city', name: 'City Site', file: 'city.jpg', sky: '#4accfe' },
   { id: 'harbor', name: 'Sunset Harbor', file: 'harbor.jpg', sky: '#f0a8b4' },
@@ -20,6 +16,7 @@ const SITES = [
 
 const gameSurface = document.querySelector('.game');
 const canvas = document.querySelector('#site');
+const canvas3d = document.querySelector('#site-3d');
 const context = canvas.getContext('2d');
 const action = document.querySelector('#action');
 const hint = document.querySelector('#hint');
@@ -57,6 +54,7 @@ let partyRoom = null;
 let partyStart = 0;
 let partyEnd = 0;
 let activeSite = SITES[0];
+let renderer3d;
 
 const floorArt = new Image();
 floorArt.src = './assets/floor.webp';
@@ -84,7 +82,7 @@ function setPhase(next, buttonText, instructions = '') {
   phase = next;
   if (action.textContent !== buttonText) action.textContent = buttonText;
   hint.textContent = instructions;
-  action.setAttribute('aria-disabled', String(['dropping', 'room', 'countdown', 'party-wait'].includes(next)));
+  action.setAttribute('aria-disabled', String(['dropping', 'drop-request', 'room', 'countdown', 'party-wait'].includes(next)));
   gameSurface.classList.toggle('solo-playing', !partyRoom && ['moving', 'dropping'].includes(next));
 }
 
@@ -94,10 +92,8 @@ function updateFloors() {
 }
 
 function reportPartyFloor(done = false) {
-  const top = tower.at(-1);
-  const left = (top.x + BASE_WIDTH / 2) / BASE_WIDTH;
-  const right = left + top.width / BASE_WIDTH;
-  const shape = [Math.round(left * 1000), Math.round(right * 1000), Math.round(top.artLeft / BASE_WIDTH * 1000)];
+  if (partyRoom.naka) return;
+  const shape = stackRules.encodeStory(tower.at(-1));
   party.report(round, tower.length - 1, done, shape, roundElapsed(performance.now()));
 }
 
@@ -122,7 +118,7 @@ function prepareRound(now) {
   activeSite = SITES[round - 1];
   gameSurface.dataset.site = activeSite.id;
   siteName.textContent = activeSite.name;
-  tower = [{ x: -BASE_WIDTH / 2, width: BASE_WIDTH, artLeft: 0 }];
+  tower = [stackRules.foundation];
   camera = 0;
   scraps = [];
   falling = null;
@@ -137,13 +133,8 @@ function prepareRound(now) {
 }
 
 function nextFloor(now) {
-  const top = tower.at(-1);
-  const center = top.x + top.width / 2;
-  const range = Math.min(320 - Math.abs(center) - top.width / 2, 145 + (BASE_WIDTH - top.width) * 0.24);
-  const floorsPlaced = Math.min(tower.length - 1, 20);
-  const duration = 2300 - floorsPlaced * 48 - (round - 1) * 75;
-  const side = tower.length % 2 ? -1 : 1;
-  motion = { x: top.x + side * range, center: top.x, width: top.width, artLeft: top.artLeft, range, duration, side, started: now, y: tower.length * FLOOR_HEIGHT };
+  motion = { ...stackRules.nextFloor(tower, round), started: now };
+  motion.x = stackRules.positionAt(motion, 0);
 }
 
 function startRound(now, finishAt = now + ROUND_MS) {
@@ -179,25 +170,44 @@ function pressAction() {
     endRound('Time’s up!');
     return;
   }
+  if (partyRoom?.naka) {
+    void dropForNaka();
+    return;
+  }
   falling = { ...motion, started: now };
   if (partyRoom) party.rememberDrop(round, falling.x, roundElapsed(now));
   audio.play('drop');
   setPhase('dropping', 'DROP');
 }
 
+async function dropForNaka() {
+  const dropRound = round;
+  const currentMotion = motion;
+  setPhase('drop-request', 'DROP');
+  const placement = await party.drop(dropRound, tower.length);
+  if (phase !== 'drop-request' || round !== dropRound || motion !== currentMotion) return;
+  if (!placement) {
+    setPhase('moving', 'DROP');
+    return;
+  }
+  const started = performance.now();
+  falling = { ...motion, x: placement.x, started,
+    nextAt: partyStart + placement.nextAt - partyRoom.start };
+  audio.play('drop');
+  setPhase('dropping', 'DROP');
+}
+
 function settleFloor(now) {
   const top = tower.at(-1);
-  const { x, width: floorWidth, artLeft, y } = falling;
-  const left = Math.max(top.x, x);
-  const right = Math.min(top.x + top.width, x + floorWidth);
-  const perfect = Math.abs(x - top.x) <= PERFECT_MARGIN;
-  if (!perfect && right - left < 1) {
+  const { x, width: floorWidth, artLeft, y, nextAt } = falling;
+  const { story, left, right, perfect } = stackRules.land(top, x);
+  if (!story) {
     scraps.push({ x, width: floorWidth, artLeft, y, started: now, direction: Math.sign(x - top.x) });
     endRound('Missed the tower!', 'miss');
     return;
   }
 
-  tower.push(perfect ? { ...top } : { x: left, width: right - left, artLeft: artLeft + left - x });
+  tower.push(story);
   audio.play(perfect ? 'perfect' : 'land');
   if (perfect) {
     feedback.textContent = 'PERFECT!';
@@ -222,7 +232,7 @@ function settleFloor(now) {
     return;
   }
   if (partyRoom) reportPartyFloor();
-  nextFloor(now);
+  nextFloor(nextAt ?? now);
   setPhase('moving', 'DROP');
 }
 
@@ -285,7 +295,8 @@ function updateParty(next, seat, recovery) {
     round = 1;
     total = 0;
     prepareRound(now);
-    setPhase('ready', 'START', 'Line up the floor with the one below.');
+    if (nakaLaunch) setPhase('room', 'WAITING');
+    else setPhase('ready', 'START', 'Line up the floor with the one below.');
     return;
   }
   if (next.phase === 'lobby') {
@@ -303,13 +314,20 @@ function updateParty(next, seat, recovery) {
     prepareRound(now);
     if (recovery) restoreTower(recovery, now);
   }
-  if (next.phase === 'round' && newRound) {
+  if (next.phase === 'round' && (newRound || (next.naka && recovery))) {
     partyStart = now + (next.start - next.now);
     partyEnd = now + (next.end - next.now);
     if (partyStart > now) {
       setPhase('countdown', 'GET READY', 'The round starts together.');
     } else {
       deadline = partyEnd;
+      if (recovery?.tower) {
+        tower = recovery.tower;
+        updateFloors();
+        nextFloor(now + recovery.nextAt - next.now);
+        falling = null;
+        summary.hidden = true;
+      }
       updateClock(Math.max(0, Math.ceil((deadline - now) / 1000)));
       audio.start();
       const pendingFinish = recovery?.queue.some(entry => entry.round === round && entry.done);
@@ -346,7 +364,8 @@ function updateParty(next, seat, recovery) {
     }));
     partyResults.hidden = false;
     summary.hidden = false;
-    setPhase('party-results', 'BACK TO SOLO');
+    setPhase('party-results', next.naka ? 'BACK TO LOBBY' : 'BACK TO SOLO');
+    if (next.naka) nakaLaunch?.notify('ended');
     summary.focus({ preventScroll: true });
   }
 }
@@ -493,14 +512,25 @@ function render(now) {
   context.setTransform(pixels, 0, 0, pixels, 0, 0);
   drawBackdrop(ground, scale);
 
+  const cargo = falling ?? motion;
+  const progress = falling ? Math.min(1, (now - falling.started) / DROP_MS) : 0;
+  const activeCargo = ['ready', 'moving', 'dropping', 'drop-request', 'countdown'].includes(phase);
+  scraps = scraps.filter((piece) => now - piece.started < 760);
+  if (renderer3d) {
+    renderer3d.render({
+      width, height, scale, lift: camera, baseline: ground, site: activeSite.id,
+      stories: tower, moving: cargo, fallingProgress: progress, activeCargo,
+      showGuide: activeCargo && !falling, scraps, effect: perfectEffect,
+      reduced: reduceMotion.matches, now,
+    });
+    return;
+  }
+
   context.save();
   context.translate(width / 2, ground + camera * scale);
   context.scale(scale, scale);
-  const cargo = falling ?? motion;
   const cargoBottom = -cargo.y - DROP_DISTANCE;
   const top = tower.at(-1);
-  const progress = falling ? Math.min(1, (now - falling.started) / DROP_MS) : 0;
-  const activeCargo = ['ready', 'moving', 'dropping', 'countdown'].includes(phase);
   const craneY = Math.min(-455, cargoBottom - FLOOR_HEIGHT - 80);
 
   drawCrane(craneY, cargo.x + cargo.width / 2, cargoBottom - FLOOR_HEIGHT, cargo.width, activeCargo && !falling);
@@ -511,7 +541,6 @@ function render(now) {
     if (!falling) drawGuide(top, cargo);
     drawStory(cargo, cargoBottom + DROP_DISTANCE * progress ** 2);
   }
-  scraps = scraps.filter((piece) => now - piece.started < 760);
   for (const piece of scraps) {
     const t = (now - piece.started) / 760;
     const y = -piece.y + 570 * t ** 2;
@@ -525,6 +554,21 @@ function render(now) {
   context.restore();
 }
 
+async function enable3d() {
+  if (location.protocol === 'file:') return;
+  try {
+    const { createTowerScene } = await import('./scene3d.js');
+    renderer3d = createTowerScene(canvas3d, {
+      floorArt, lobbyArt, floorHeight: FLOOR_HEIGHT, baseWidth: BASE_WIDTH,
+      dropDistance: DROP_DISTANCE, effectMs: PERFECT_EFFECT_MS,
+    });
+    canvas3d.hidden = false;
+    gameSurface.dataset.renderer = '3d';
+  } catch {
+    // The Canvas 2D renderer can run without WebGL or the Three.js module.
+  }
+}
+
 function frame(now) {
   if (phase === 'countdown') {
     if (now >= partyStart) startRound(partyStart, partyEnd);
@@ -533,16 +577,15 @@ function frame(now) {
       if (action.textContent !== label) action.textContent = label;
     }
   }
-  if (phase === 'moving' || phase === 'dropping') {
+  if (['moving', 'dropping', 'drop-request'].includes(phase)) {
     const seconds = Math.max(0, Math.ceil((deadline - now) / 1000));
     updateClock(seconds);
     if (falling && now - falling.started >= DROP_MS) {
       settleFloor(now);
-    } else if (!falling && !seconds) {
+    } else if (phase === 'moving' && !seconds) {
       endRound('Time’s up!');
     } else if (!falling) {
-      const cycle = ((now - motion.started) / motion.duration) % 2;
-      motion.x = motion.center + motion.side * motion.range * (2 * Math.abs(1 - cycle) - 1);
+      motion.x = stackRules.positionAt(motion, now - motion.started);
     }
   }
   if (perfectEffect && now - perfectEffect.started >= PERFECT_EFFECT_MS) {
@@ -562,9 +605,26 @@ document.addEventListener('keydown', (event) => {
   if (!event.repeat) pressAction();
 });
 new ResizeObserver(resize).observe(canvas);
+canvas3d.addEventListener('webglcontextlost', () => {
+  renderer3d = null;
+  canvas3d.hidden = true;
+  gameSurface.dataset.renderer = '2d';
+});
 
 bestLabel.textContent = `BEST ${best}`;
 prepareRound(performance.now());
 resize();
+const rendererReady = enable3d();
 requestAnimationFrame(frame);
-party.restore();
+if (nakaLaunch) {
+  setPhase('room', 'WAITING');
+  const waitForArt = Promise.allSettled([...SITES.map(site => site.image), floorArt, lobbyArt]
+    .map(image => image.decode?.()));
+  void Promise.race([Promise.all([rendererReady, waitForArt]), new Promise(resolve => setTimeout(resolve, 5000))])
+    .then(() => {
+      party.restore();
+      requestAnimationFrame(() => requestAnimationFrame(() => nakaLaunch.notify('ready')));
+    });
+} else {
+  party.restore();
+}

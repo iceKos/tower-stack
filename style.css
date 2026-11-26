@@ -20,7 +20,8 @@ body { margin: 0; }
   isolation: isolate;
 }
 
-#site { position: absolute; inset: 0; width: 100%; height: 100%; }
+#site, #site-3d { position: absolute; inset: 0; width: 100%; height: 100%; }
+#site-3d { pointer-events: none; }
 
 .hud {
   position: absolute;
@@ -246,7 +247,8 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 5px; }
   max-height: min(120px, 15vh);
   object-fit: contain;
 }
-.rivals[data-count="4"] .rival-building, .rivals[data-count="5"] .rival-building { max-height: clamp(48px, 9vh, 83px); }
+.rivals[data-count="4"] .rival-building { max-height: clamp(28px, calc((100dvh - 390px) / 4), 75px); }
+.rivals[data-count="5"] .rival-building { max-height: clamp(24px, calc((100dvh - 450px) / 5), 68px); }
 .party-results {
   list-style: none;
   max-height: 34dvh;
@@ -258,7 +260,7 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 5px; }
 
 .with-rivals { --rival-width: clamp(160px, 20vw, 250px); }
 @media (min-width: 761px) {
-  .with-rivals #site { width: calc(100% - var(--rival-width) - 24px); }
+  .with-rivals :is(#site, #site-3d) { width: calc(100% - var(--rival-width) - 24px); }
   .with-rivals .controls, .with-rivals .feedback, .with-rivals .summary { left: calc((100% - var(--rival-width) - 24px) / 2); }
   .with-rivals .hud { right: calc(var(--rival-width) + 30px); }
 }
@@ -268,10 +270,11 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 5px; }
   .party-shortcut:active { transform: translate(-50%, 2px); }
   .rivals { top: clamp(76px, 13vh, 102px); right: 11px; left: 11px; width: auto; }
   .rivals ul { display: flex; gap: 5px; overflow-x: auto; }
+  .rivals[data-count="5"] ul { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .rivals li { flex: 1 0 85px; max-width: 170px; padding: 4px 4px 1px; }
   .rival-heading { gap: 4px; padding: 1px 5px; }
   .rival-name { font-size: 12px; }
   .rival-state { padding-inline: 5px; font-size: 8px; }
   .rivals strong { font-size: 16px; }
-  .rival-building, .rivals[data-count="4"] .rival-building, .rivals[data-count="5"] .rival-building { height: 52px; }
+  .rival-building, .rivals[data-count="4"] .rival-building, .rivals[data-count="5"] .rival-building { height: 52px; max-height: 52px; }
 }

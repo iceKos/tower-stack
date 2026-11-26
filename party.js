@@ -13,6 +13,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
   const members = document.querySelector('#party-members');
   const hostStart = document.querySelector('#party-start');
   const close = document.querySelector('#party-close');
+  const retryLaunch = document.querySelector('#naka-retry');
   const exit = document.querySelector('#party-exit');
   const rivals = document.querySelector('#rivals');
   const rivalList = document.querySelector('#rival-list');
@@ -25,7 +26,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
   let room;
   let stream;
   const storagePrefix = 'tower-stack-seat:';
-  const tabKey = 'tower-stack-current-seat';
+  const tabKey = nakaLaunch ? 'tower-stack-naka-seat:' + nakaLaunch.sessionId : 'tower-stack-current-seat';
   let connected = false;
   let flushing;
   let retryTimer;
@@ -68,7 +69,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
         const key = localStorage.key(i);
         if (!key?.startsWith(storagePrefix)) continue;
         const saved = readSeat(key.slice(storagePrefix.length));
-        if (saved && Date.now() - saved.savedAt < 24 * 60 * 60_000) savedSeats.push(saved);
+        if (saved && !saved.naka && Date.now() - saved.savedAt < 24 * 60 * 60_000) savedSeats.push(saved);
       }
     } catch { /* A new room can still be created. */ }
     resumeList.replaceChildren(...savedSeats.sort((a, b) => b.savedAt - a.savedAt).map(saved => {
@@ -89,7 +90,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-      signal: AbortSignal.timeout(3500),
+      signal: AbortSignal.timeout(data.type === 'launch' ? 12_000 : 3500),
     });
     if (!response.headers.get('content-type')?.includes('application/json')) {
       throw new Error('Start the Tower Stack room server to play with friends.');
@@ -197,16 +198,20 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
 
   function render() {
     const inLobby = room?.phase === 'lobby';
-    const inMatch = Boolean(room && !inLobby);
-    launcher.hidden = Boolean(session) || !available;
-    exit.hidden = !inMatch;
+    const inMatch = Boolean(room && !inLobby && room.phase !== 'cancelled');
+    launcher.hidden = Boolean(nakaLaunch || session) || !available;
+    exit.hidden = !inMatch || (Boolean(nakaLaunch) && room?.phase === 'finished');
+    exit.textContent = nakaLaunch ? 'Back to lobby' : 'Leave room';
     rivals.hidden = !inMatch;
     document.querySelector('.game').classList.toggle('with-rivals', inMatch);
-    form.hidden = Boolean(session);
+    form.hidden = Boolean(nakaLaunch || session);
     if (session) resumeList.hidden = true;
-    lobby.hidden = !inLobby;
-    close.textContent = inLobby ? 'Leave room' : 'Back';
-    if (inLobby) {
+    lobby.hidden = !inLobby || Boolean(nakaLaunch);
+    close.textContent = nakaLaunch ? 'Back to lobby' : inLobby ? 'Leave room' : 'Back';
+    if (nakaLaunch && inLobby) {
+      const online = room.players.filter(player => player.online).length;
+      notice(`Waiting for builders · ${online}/${room.players.length} connected`);
+    } else if (inLobby) {
       roomCode.textContent = room.code;
       members.replaceChildren(...room.players.map(player => {
         const row = document.createElement('li');
@@ -228,12 +233,12 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
     const active = session;
     const events = new EventSource('/events?' + new URLSearchParams({ code: active.code, token: active.token }));
     stream = events;
-    function receive(next, stories) {
+    function receive(next, recovery = null) {
       if (session !== active) return;
       connected = true;
       connection.hidden = true;
       room = next;
-      if (stories) {
+      if (recovery) {
         const saved = readSeat(active.token);
         if (saved) {
           active.queue = saved.queue;
@@ -250,19 +255,25 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
         }
       }
       render();
+      if (room.phase === 'cancelled') {
+        showLaunchMessage('The full party did not join. Return to the Naka Lite lobby.');
+        events.close();
+        return;
+      }
       if (room.phase === 'lobby' && !dialog.open) dialog.showModal();
       if (room.phase !== 'lobby' && dialog.open) dialog.close();
-      onRoom(room, active.seat, stories ? { stories, queue: active.queue, draft: active.draft } : null);
+      onRoom(room, active.seat, recovery ? { ...recovery, queue: active.queue, draft: active.draft } : null);
       void flushProgress();
     }
     events.addEventListener('resume', event => {
       const restored = JSON.parse(event.data);
-      receive(restored.room, restored.stories);
+      receive(restored.room, restored);
     });
     events.onmessage = event => receive(JSON.parse(event.data));
     events.addEventListener('replaced', () => {
       if (session !== active) return;
       reset(false);
+      if (nakaLaunch) return showLaunchMessage('This match was opened in another tab.');
       renderResume();
       notice('This seat was resumed in another tab.');
       if (!dialog.open) dialog.showModal();
@@ -270,6 +281,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
     events.addEventListener('expired', () => {
       if (session !== active) return;
       reset();
+      if (nakaLaunch) return showLaunchMessage('This match has expired. Return to the Naka Lite lobby.');
       renderResume();
       notice('This room or seat has expired. Join a new room.');
       if (!dialog.open) dialog.showModal();
@@ -313,6 +325,21 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
   }
 
   function leave() {
+    if (nakaLaunch) {
+      const active = session;
+      const phase = room?.phase;
+      departed = true;
+      reset();
+      showLaunchMessage('Returning to the Naka Lite lobby…');
+      if (active && phase !== 'cancelled' && phase !== 'finished') {
+        void fetch('/party', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...credentials(active), type: 'leave' }), keepalive: true,
+        }).catch(() => {});
+      }
+      nakaLaunch.notify('leave');
+      return;
+    }
     if (!session) return;
     void command({ ...credentials(session), type: 'leave' }).catch(() => {});
     reset();
@@ -320,12 +347,53 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
 
   function openSeat(member) {
     session = member;
+    member.naka = Boolean(nakaLaunch);
     member.savedAt = Date.now();
     saveSeat();
     tabSeat(member.token);
     render();
     notice('Connecting to the room…');
+    retryLaunch.hidden = true;
     subscribe();
+  }
+
+  function showLaunchMessage(message, retry = false) {
+    retryLaunch.hidden = !retry;
+    notice(message);
+    if (!dialog.open) dialog.showModal();
+  }
+
+  let launching = false;
+  let departed = false;
+  async function launch() {
+    if (launching || departed) return;
+    if (!nakaLaunch.sessionId || !nakaLaunch.token) {
+      showLaunchMessage('Open this match from the Naka Lite lobby.');
+      return;
+    }
+    launching = true;
+    showLaunchMessage('Connecting to Naka Lite…');
+    try {
+      const member = await command({
+        type: 'launch', sessionId: nakaLaunch.sessionId, launchToken: nakaLaunch.token,
+      });
+      if (!departed) openSeat({ ...(readSeat(member.token) ?? {}), ...member, queue: [], draft: null });
+    } catch (error) {
+      if (!departed) showLaunchMessage(error.message || 'Could not connect to Naka Lite.', true);
+    } finally {
+      launching = false;
+    }
+  }
+
+  async function drop(round, floor) {
+    if (!connected || !session) return null;
+    const active = session;
+    try {
+      return await command({ ...credentials(active), type: 'drop', round, floor });
+    } catch {
+      if (session === active) subscribe();
+      return null;
+    }
   }
 
   async function flushProgress() {
@@ -410,8 +478,11 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
     }
   });
 
-  close.addEventListener('click', () => dialog.close());
+  retryLaunch.addEventListener('click', launch);
+  close.addEventListener('click', () => nakaLaunch ? leave() : dialog.close());
+  dialog.addEventListener('cancel', event => { if (nakaLaunch) event.preventDefault(); });
   dialog.addEventListener('close', () => {
+    if (nakaLaunch) return;
     if (room?.phase === 'lobby') leave();
     else if (session && !room) reset(false);
   });
@@ -427,13 +498,17 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
   });
   render();
 
-  return { report, leave, rememberDrop, restore() {
+  return { report, leave, rememberDrop, drop, restore() {
     if (!available) return;
     let saved;
     try { saved = readSeat(sessionStorage.getItem(tabKey)); } catch { /* Storage is optional. */ }
-    if (saved) {
+    if (nakaLaunch?.token) {
+      void launch();
+    } else if (saved) {
       dialog.showModal();
       openSeat(saved);
+    } else if (nakaLaunch) {
+      showLaunchMessage('Open this match from the Naka Lite lobby.');
     }
   } };
 }

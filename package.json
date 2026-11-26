@@ -1,0 +1,14 @@
+{
+  "name": "tower-stack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check naka-server.mjs && node --check naka-client.js && node --check stack-rules.cjs && node --check party.js && node --check game.js && node --check scene3d.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  }
+}
