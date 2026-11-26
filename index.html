@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#62cdee">
+  <title>Tower Stack</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./audio.js" defer></script>
+  <script src="./party.js" defer></script>
+  <script src="./game.js" defer></script>
+</head>
+<body>
+  <main class="game" aria-label="Tower Stack">
+    <canvas id="site" aria-hidden="true"></canvas>
+    <header class="hud">
+      <div class="round-info">
+        <p id="round" class="round">ROUND 1 / 3</p>
+        <p id="site-name" class="site-name">City Site</p>
+      </div>
+      <p id="timer" class="timer" aria-label="Time left">1:30</p>
+      <p id="best" class="best">BEST 0</p>
+      <p id="floors" class="floors" aria-live="polite">YOU · 0 FLOORS</p>
+    </header>
+    <button id="sound" class="sound-toggle" type="button" aria-label="Mute sound" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 9h4l5-4v14l-5-4H3z"/>
+        <path class="sound-waves" d="M15 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/>
+        <path class="sound-cross" d="m16 9 5 6m0-6-5 6"/>
+      </svg>
+    </button>
+    <p id="feedback" class="feedback" aria-hidden="true"></p>
+    <section id="summary" class="summary" aria-labelledby="summary-title" tabindex="-1" hidden>
+      <h1 id="summary-title"></h1>
+      <p id="summary-score"></p>
+      <p id="summary-total"></p>
+      <ol id="party-results" class="party-results" hidden></ol>
+    </section>
+    <aside id="rivals" class="rivals" aria-label="Other players" hidden>
+      <p id="party-connection" role="status" hidden>Reconnecting…</p>
+      <ul id="rival-list"></ul>
+    </aside>
+    <div class="controls">
+      <p id="hint">Line up the floor with the one below.</p>
+      <button id="action" type="button" aria-describedby="hint">START</button>
+    </div>
+    <button id="party-open" class="party-shortcut" type="button" hidden>Play with friends</button>
+    <button id="party-exit" class="party-shortcut" type="button" hidden>Leave room</button>
+  </main>
+  <dialog id="party-dialog" class="party-dialog" aria-labelledby="party-title">
+    <h1 id="party-title">Play with friends</h1>
+    <div id="party-resume" class="party-resume" hidden></div>
+    <form id="party-form">
+      <label for="party-name">Your name</label>
+      <input id="party-name" maxlength="18" autocomplete="nickname" required>
+      <button type="submit" value="create">Create room</button>
+      <label for="party-code">Room code</label>
+      <input id="party-code" maxlength="5" autocomplete="off" autocapitalize="characters" placeholder="ABCDE">
+      <button type="submit" value="join">Join room</button>
+    </form>
+    <div id="party-lobby" hidden>
+      <p>Room code</p>
+      <strong id="party-room-code" class="room-code"></strong>
+      <ul id="party-members"></ul>
+      <button id="party-start" type="button" hidden>Start match</button>
+    </div>
+    <p id="party-status" role="status"></p>
+    <button id="party-close" type="button">Back</button>
+  </dialog>
+</body>
+</html>
