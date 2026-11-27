@@ -133,7 +133,7 @@ function prepareRound(now) {
 }
 
 function nextFloor(now) {
-  motion = { ...stackRules.nextFloor(tower, round), started: now };
+  motion = { ...stackRules.nextFloor(tower, round), started: now, elapsed: 0 };
   motion.x = stackRules.positionAt(motion, 0);
 }
 
@@ -171,7 +171,7 @@ function pressAction() {
     return;
   }
   if (partyRoom?.naka) {
-    void dropForNaka();
+    void dropForNaka(now);
     return;
   }
   falling = { ...motion, started: now };
@@ -180,20 +180,21 @@ function pressAction() {
   setPhase('dropping', 'DROP');
 }
 
-async function dropForNaka() {
-  const dropRound = round;
-  const currentMotion = motion;
+async function dropForNaka(now) {
+  const request = party.drop(round, tower.length, motion.elapsed);
+  if (!request) return;
+  const drop = { ...motion, started: now };
+  falling = drop;
+  audio.play('drop');
   setPhase('drop-request', 'DROP');
-  const placement = await party.drop(dropRound, tower.length);
-  if (phase !== 'drop-request' || round !== dropRound || motion !== currentMotion) return;
+  const placement = await request;
+  if (phase !== 'drop-request' || falling !== drop) return;
   if (!placement) {
+    falling = null;
     setPhase('moving', 'DROP');
     return;
   }
-  const started = performance.now();
-  falling = { ...motion, x: placement.x, started,
-    nextAt: partyStart + placement.nextAt - partyRoom.start };
-  audio.play('drop');
+  drop.nextAt = partyStart + placement.nextAt - partyRoom.start;
   setPhase('dropping', 'DROP');
 }
 
@@ -580,12 +581,13 @@ function frame(now) {
   if (['moving', 'dropping', 'drop-request'].includes(phase)) {
     const seconds = Math.max(0, Math.ceil((deadline - now) / 1000));
     updateClock(seconds);
-    if (falling && now - falling.started >= DROP_MS) {
+    if (phase === 'dropping' && falling && now - falling.started >= DROP_MS) {
       settleFloor(now);
     } else if (phase === 'moving' && !seconds) {
       endRound('Time’s up!');
-    } else if (!falling) {
-      motion.x = stackRules.positionAt(motion, now - motion.started);
+    } else if (phase === 'moving') {
+      motion.elapsed = Math.max(0, Math.floor(now - motion.started));
+      motion.x = stackRules.positionAt(motion, motion.elapsed);
     }
   }
   if (perfectEffect && now - perfectEffect.started >= PERFECT_EFFECT_MS) {

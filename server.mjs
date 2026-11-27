@@ -8,6 +8,7 @@ const host = process.env.HOST ?? (process.env.RENDER ? '0.0.0.0' : '127.0.0.1');
 const port = Number(process.env.PORT ?? 5181);
 const { roundMs: duration, roundCount, dropMs } = stackRules;
 const syncGrace = 12_000;
+const dropNetworkGrace = 500;
 const maxPlayers = 6;
 const foundation = [0, 1000];
 const visibleStories = 18;
@@ -101,7 +102,7 @@ function startRound(room) {
       player.lastDrop = null;
     }
   }
-  schedule(room, room.end - Date.now() + (room.sessionId ? dropMs : syncGrace), () => finishRound(room));
+  schedule(room, room.end - Date.now() + (room.sessionId ? dropNetworkGrace : syncGrace), () => finishRound(room));
   broadcast(room);
 }
 
@@ -239,12 +240,18 @@ function dropNaka(room, player, body, response) {
     return send(response, 200, player.lastDrop);
   }
   const now = Date.now();
+  const elapsed = body.elapsed === undefined ? now - player.nextAt : body.elapsed;
+  if (!Number.isSafeInteger(elapsed) || elapsed < 0) {
+    return send(response, 409, { error: 'This drop is no longer available.' });
+  }
+  const dropAt = player.nextAt + elapsed;
   if (room.phase !== 'round' || round !== room.round || player.done
-    || floor !== player.floors + 1 || now < player.nextAt || now >= room.end) {
+    || floor !== player.floors + 1
+    || dropAt > now || now - dropAt > dropNetworkGrace || dropAt >= room.end) {
     return send(response, 409, { error: 'This drop is no longer available.' });
   }
   const motion = stackRules.nextFloor(player.tower, round);
-  const x = stackRules.positionAt(motion, now - player.nextAt);
+  const x = stackRules.positionAt(motion, elapsed);
   const { story } = stackRules.land(player.tower.at(-1), x);
   if (story) {
     player.tower.push(story);
@@ -253,7 +260,7 @@ function dropNaka(room, player, body, response) {
   } else {
     player.done = true;
   }
-  player.nextAt = now + dropMs;
+  player.nextAt = dropAt + dropMs;
   room.updated = now;
   player.lastDrop = { floor, x, now, nextAt: player.nextAt };
   send(response, 200, player.lastDrop);

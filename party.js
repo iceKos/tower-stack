@@ -385,15 +385,13 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
     }
   }
 
-  async function drop(round, floor) {
+  function drop(round, floor, elapsed) {
     if (!connected || !session) return null;
     const active = session;
-    try {
-      return await command({ ...credentials(active), type: 'drop', round, floor });
-    } catch {
+    return command({ ...credentials(active), type: 'drop', round, floor, elapsed }).catch(() => {
       if (session === active) subscribe();
       return null;
-    }
+    });
   }
 
   async function flushProgress() {

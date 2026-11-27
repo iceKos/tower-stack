@@ -141,11 +141,21 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
     await Promise.all(players.slice(0, 5).map(async (player, seat) => {
       let floor = 1;
       let nextAt = room.start;
-      if (seat === 0) nextAt += (2300 - (round - 1) * 75) / 2;
       while (!streams[seat].room.players[seat].done && floor <= 6) {
-        await pause(Math.max(0, nextAt - Date.now() + 8));
-        const drop = { ...player, type: 'drop', round, floor };
+        const elapsed = seat === 0 && floor === 1 ? Math.floor((2300 - (round - 1) * 75) / 2) : 8;
+        const delayedAtHarbor = seat === 0 && round === 2 && floor === 1;
+        const drop = { ...player, type: 'drop', round, floor, elapsed };
+        await pause(Math.max(0, nextAt + elapsed - Date.now() + (delayedAtHarbor ? 300 : 5)));
+        if (delayedAtHarbor) {
+          await command({ ...drop, elapsed: 0 }, 409);
+          await command({ ...drop, elapsed: elapsed + 3000 }, 409);
+        }
         const placed = await command(drop);
+        if (delayedAtHarbor) {
+          assert.ok(placed.now - (nextAt + elapsed) >= 250);
+          assert.ok(Math.abs(placed.x + 174) < 1, 'the server lands the floor at the centered input frame');
+          assert.equal(placed.nextAt, nextAt + elapsed + 210);
+        }
         if (round === 1 && floor === 1 && seat === 0) {
           assert.deepEqual(await command(drop), placed);
           streams[seat].close();
