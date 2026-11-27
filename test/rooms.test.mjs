@@ -64,6 +64,13 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
   const [line] = await once(output, 'line');
   const base = line.split(' at ')[1];
   assert.equal((await fetch(base + '/healthz')).status, 200);
+  const library = base + '/vendor/three.module.js';
+  const raw = await fetch(library, { method: 'HEAD', headers: { 'Accept-Encoding': 'identity' } });
+  const gzip = await fetch(library, { method: 'HEAD', headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(gzip.headers.get('content-encoding'), 'gzip');
+  assert.ok(Number(gzip.headers.get('content-length')) < Number(raw.headers.get('content-length')) / 2);
+  assert.equal((await fetch(library, { headers: { 'If-None-Match': gzip.headers.get('etag') } })).status, 304);
+  t.diagnostic(`Three.js transfer: ${raw.headers.get('content-length')} → ${gzip.headers.get('content-length')} bytes`);
 
   async function command(data, status = 200) {
     const response = await fetch(base + '/party', {
@@ -75,11 +82,11 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
     return result;
   }
 
-  async function listen(member) {
+  async function listen(member, format = 'delta') {
     const controller = new AbortController();
     t.after(() => controller.abort());
     const { code, token } = member;
-    const response = await fetch(base + '/events?' + new URLSearchParams({ code, token }), { signal: controller.signal });
+    const response = await fetch(base + '/events?' + new URLSearchParams({ code, token, format }), { signal: controller.signal });
     const state = { close: () => controller.abort() };
     void (async () => {
       let pendingData = '';
@@ -96,8 +103,15 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
             if (lines[0] === 'event: resume') {
               state.resume = event;
               state.room = event.room;
+            } else if (lines[0] === 'event: progress') {
+              const player = state.room.players.find(member => member.seat === event.seat);
+              player.floors = event.floors;
+              player.done = event.done;
+              if (event.story) player.stories = [...player.stories, event.story].slice(-18);
+              state.progress = { ...event, bytes: Buffer.byteLength(lines.join('\n') + '\n\n') };
             } else if (!lines[0].startsWith('event:')) {
               state.room = event;
+              state.fullBytes = Buffer.byteLength(lines.join('\n') + '\n\n');
             }
           }
         }
@@ -113,9 +127,21 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
   const local = [soloHost, ...await Promise.all(roster.slice(1).map(({ username: name }) =>
     command({ type: 'join', code: soloHost.code, name })))];
   await command({ type: 'join', code: soloHost.code, name: 'Too many' }, 409);
-  const localStreams = await Promise.all(local.map(listen));
+  const localStreams = await Promise.all(local.map((member, seat) => listen(member, seat === 0 ? 'full' : 'delta')));
   await command({ ...soloHost, type: 'start' });
-  await until(() => localStreams[0].room, state => state?.phase === 'round' && state.players.length === 6);
+  const localMatch = await until(() => localStreams[0].room, state => state?.phase === 'round' && state.players.length === 6);
+  await pause(Math.max(0, localMatch.start - Date.now() + 20));
+  const shape = [100, 900, 100];
+  await command({ ...soloHost, type: 'progress', round: 1, floors: 1, shape });
+  const update = await until(() => localStreams[1].progress, Boolean);
+  await until(() => localStreams[0].room.players[0].floors, floors => floors === 1);
+  assert.deepEqual(update.story, shape);
+  assert.deepEqual(localStreams[1].room.players[0].stories, localStreams[0].room.players[0].stories);
+  assert.ok(update.bytes < localStreams[0].fullBytes / 4);
+  t.diagnostic(`Six-player room update: ${localStreams[0].fullBytes} → ${update.bytes} bytes per recipient`);
+  localStreams[1].close();
+  localStreams[1] = await listen(local[1]);
+  assert.deepEqual(localStreams[1].resume.room.players[0].stories.at(-1), shape);
   localStreams.forEach(stream => stream.close());
 
   const launch = (launchToken, sessionId = 'six-players', status = 200) =>
@@ -129,7 +155,7 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
   await command({ type: 'join', code: players[0].code, name: 'Guest' }, 404);
   await command({ ...players[0], type: 'start' }, 409);
 
-  const streams = await Promise.all(players.slice(0, 5).map(listen));
+  const streams = await Promise.all(players.slice(0, 5).map(member => listen(member)));
   assert.equal(streams[0].room.phase, 'lobby');
   streams.push(await listen(players[5]));
   await until(() => streams[0].room, room => room.phase === 'round');

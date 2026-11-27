@@ -1,21 +1,24 @@
 import { randomBytes, randomInt } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
 import { createNakaPlatform } from './naka-server.mjs';
 import stackRules from './stack-rules.cjs';
 
 const host = process.env.HOST ?? (process.env.RENDER ? '0.0.0.0' : '127.0.0.1');
 const port = Number(process.env.PORT ?? 5181);
-const { roundMs: duration, roundCount, dropMs } = stackRules;
+const { roundMs: duration, roundCount, dropMs, visibleStories } = stackRules;
 const syncGrace = 12_000;
 const dropNetworkGrace = 500;
 const maxPlayers = 6;
 const foundation = [0, 1000];
-const visibleStories = 18;
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const rooms = new Map();
 const nakaRooms = new Map();
 const platform = createNakaPlatform();
+const compress = promisify(gzip);
+const assetCache = new Map();
 const files = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
@@ -63,13 +66,17 @@ function snapshot(room) {
   };
 }
 
-function broadcast(room) {
-  const message = 'data: ' + JSON.stringify(snapshot(room)) + '\n\n';
+function broadcast(room, changedPlayer, story) {
+  let full;
+  const delta = changedPlayer && 'event: progress\ndata: ' + JSON.stringify({
+    round: room.round, seat: changedPlayer.seat, floors: changedPlayer.floors, done: changedPlayer.done, story,
+  }) + '\n\n';
   for (const player of room.players) {
     const stream = player.stream;
     if (!stream) continue;
     if (stream.writableLength > 64 * 1024) stream.destroy();
-    else stream.write(message);
+    else if (delta && player.delta) stream.write(delta);
+    else stream.write(full ??= 'data: ' + JSON.stringify(snapshot(room)) + '\n\n');
   }
 }
 
@@ -151,10 +158,10 @@ function finishMatch(room) {
   broadcast(room);
 }
 
-function checkRound(room) {
+function checkRound(room, changedPlayer, story) {
   if (room.phase === 'round' && (room.players.every(player => player.done)
     || room.players.filter(player => !player.left).length < 2)) finishRound(room);
-  else broadcast(room);
+  else broadcast(room, changedPlayer, story);
 }
 
 function createRoom() {
@@ -253,9 +260,10 @@ function dropNaka(room, player, body, response) {
   const motion = stackRules.nextFloor(player.tower, round);
   const x = stackRules.positionAt(motion, elapsed);
   const { story } = stackRules.land(player.tower.at(-1), x);
+  const shape = story && stackRules.encodeStory(story);
   if (story) {
     player.tower.push(story);
-    player.stories.push(stackRules.encodeStory(story));
+    player.stories.push(shape);
     player.floors++;
   } else {
     player.done = true;
@@ -264,7 +272,7 @@ function dropNaka(room, player, body, response) {
   room.updated = now;
   player.lastDrop = { floor, x, now, nextAt: player.nextAt };
   send(response, 200, player.lastDrop);
-  broadcast(room);
+  broadcast(room, player, shape ?? undefined);
   if (room.players.every(member => member.done)) schedule(room, dropMs + 300, () => finishRound(room));
 }
 
@@ -320,6 +328,7 @@ async function command(request, response) {
       return send(response, 200, { accepted: true });
     }
     if (player.done || body.floors > player.floors + 1) return send(response, 409, { error: 'Round progress is out of sequence.' });
+    let addedStory;
     if (body.floors > player.floors) {
       const previous = player.stories.at(-1);
       const shape = body.shape ?? previous;
@@ -329,11 +338,12 @@ async function command(request, response) {
         return send(response, 400, { error: 'Invalid tower shape.' });
       }
       player.stories.push(shape);
+      addedStory = shape;
     }
     player.floors = body.floors;
     player.done = body.done === true;
     room.updated = now;
-    checkRound(room);
+    checkRound(room, player, addedStory);
   } else if (body.type === 'leave') {
     if (room.phase === 'finished') return send(response, 200, { accepted: true });
     player.left = player.done = true;
@@ -365,6 +375,7 @@ function subscribe(url, response) {
   }
   const previous = player.stream;
   player.stream = response;
+  player.delta = url.searchParams.get('format') === 'delta';
   previous?.end('event: replaced\ndata: {}\n\n');
   response.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -377,13 +388,45 @@ function subscribe(url, response) {
   }) + '\n\n');
   room.updated = Date.now();
   if (room.sessionId && room.phase === 'lobby' && room.players.every(member => member.stream)) startRound(room);
-  else broadcast(room);
+  else if (!previous) broadcast(room);
   response.on('close', () => {
     if (player.stream !== response) return;
     player.stream = null;
     player.seen = Date.now();
     broadcast(room);
   });
+}
+
+async function serveAsset(request, response, [filename, type]) {
+  const path = new URL(filename, import.meta.url);
+  const { mtimeMs, size } = await stat(path);
+  const etag = `W/"${size}-${mtimeMs}"`;
+  const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', ETag: etag };
+  const compressible = type.startsWith('text/') && size >= 1024;
+  if (compressible) headers.Vary = 'Accept-Encoding';
+  const validators = request.headers['if-none-match']?.split(',').map(tag => tag.trim().replace(/^W\//, ''));
+  if (validators?.includes(etag.slice(2)) || validators?.includes('*')) {
+    response.writeHead(304, headers).end();
+    return;
+  }
+
+  let asset = assetCache.get(filename);
+  if (asset?.etag !== etag) {
+    asset = { etag, raw: readFile(path) };
+    assetCache.set(filename, asset);
+  }
+  const useGzip = compressible && request.headers['accept-encoding']?.split(',').some(value => {
+    const [coding, weight] = value.trim().toLowerCase().split(/\s*;\s*/);
+    return coding === 'gzip' && (weight === undefined || Number(weight.slice(2)) > 0);
+  });
+  let content = await asset.raw;
+  if (useGzip) {
+    asset.gzip ??= compress(content);
+    content = await asset.gzip;
+    headers['Content-Encoding'] = 'gzip';
+  }
+  response.writeHead(200, { ...headers, 'Content-Length': content.length });
+  response.end(request.method === 'HEAD' ? undefined : content);
 }
 
 const server = createServer(async (request, response) => {
@@ -399,11 +442,9 @@ const server = createServer(async (request, response) => {
     return;
   }
   try {
-    const [filename, type] = asset;
-    const content = await readFile(new URL(filename, import.meta.url));
-    response.writeHead(200, { 'Content-Type': type, 'Content-Length': content.length, 'Cache-Control': 'no-cache' });
-    response.end(request.method === 'HEAD' ? undefined : content);
+    await serveAsset(request, response, asset);
   } catch {
+    assetCache.delete(asset[0]);
     response.writeHead(500).end();
   }
 });

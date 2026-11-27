@@ -8,11 +8,7 @@ const SITES = [
   { id: 'city', name: 'City Site', file: 'city.jpg', sky: '#4accfe' },
   { id: 'harbor', name: 'Sunset Harbor', file: 'harbor.jpg', sky: '#f0a8b4' },
   { id: 'night', name: 'Night Skyline', file: 'night.jpg', sky: '#080755' },
-].map(site => {
-  const image = new Image();
-  image.src = './assets/' + site.file;
-  return { ...site, image };
-});
+].map(site => ({ ...site, image: new Image() }));
 
 const gameSurface = document.querySelector('.game');
 const canvas = document.querySelector('#site');
@@ -55,11 +51,21 @@ let partyStart = 0;
 let partyEnd = 0;
 let activeSite = SITES[0];
 let renderer3d;
+let sceneDirty = true;
+let backdropSite;
+let backdropCamera;
 
 const floorArt = new Image();
 floorArt.src = './assets/floor.webp';
 const lobbyArt = new Image();
 lobbyArt.src = './assets/lobby.webp';
+for (const image of [...SITES.map(site => site.image), floorArt, lobbyArt]) {
+  image.addEventListener('load', () => { sceneDirty = true; });
+}
+
+function loadSite(site) {
+  if (site && !site.image.src) site.image.src = './assets/' + site.file;
+}
 
 function readBest() {
   try {
@@ -79,6 +85,7 @@ function saveBest() {
 }
 
 function setPhase(next, buttonText, instructions = '') {
+  if (next !== phase) sceneDirty = true;
   phase = next;
   if (action.textContent !== buttonText) action.textContent = buttonText;
   hint.textContent = instructions;
@@ -116,6 +123,8 @@ function updateClock(seconds) {
 
 function prepareRound(now) {
   activeSite = SITES[round - 1];
+  loadSite(activeSite);
+  sceneDirty = true;
   gameSurface.dataset.site = activeSite.id;
   siteName.textContent = activeSite.name;
   tower = [stackRules.foundation];
@@ -142,6 +151,7 @@ function startRound(now, finishAt = now + ROUND_MS) {
   prepareRound(now);
   deadline = finishAt;
   setPhase('moving', 'DROP');
+  loadSite(SITES[round]);
 }
 
 function pressAction() {
@@ -322,6 +332,8 @@ function updateParty(next, seat, recovery) {
       setPhase('countdown', 'GET READY', 'The round starts together.');
     } else {
       deadline = partyEnd;
+      sceneDirty = true;
+      loadSite(SITES[round]);
       if (recovery?.tower) {
         tower = recovery.tower;
         updateFloors();
@@ -379,6 +391,7 @@ function resize() {
   pixels = Math.min(devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * pixels);
   canvas.height = Math.round(height * pixels);
+  sceneDirty = true;
 }
 
 function drawBackdrop(ground, scale) {
@@ -509,9 +522,16 @@ function render(now) {
   const ground = height * 0.855;
   const peak = Math.max(510, tower.length * FLOOR_HEIGHT + DROP_DISTANCE + FLOOR_HEIGHT + 135);
   const lift = Math.max(0, peak - (ground - height * 0.14) / scale);
-  camera += (lift - camera) * (reduceMotion.matches ? 1 : 0.16);
-  context.setTransform(pixels, 0, 0, pixels, 0, 0);
-  drawBackdrop(ground, scale);
+  const animating = phase === 'moving' || falling || scraps.length || perfectEffect;
+  if (!sceneDirty && camera === lift && !animating) return;
+  camera = reduceMotion.matches || Math.abs(lift - camera) < 0.05 ? lift : camera + (lift - camera) * 0.16;
+  if (!renderer3d || sceneDirty || backdropSite !== activeSite || backdropCamera !== camera) {
+    context.setTransform(pixels, 0, 0, pixels, 0, 0);
+    drawBackdrop(ground, scale);
+    backdropSite = activeSite;
+    backdropCamera = camera;
+  }
+  sceneDirty = false;
 
   const cargo = falling ?? motion;
   const progress = falling ? Math.min(1, (now - falling.started) / DROP_MS) : 0;
@@ -563,6 +583,7 @@ async function enable3d() {
       floorArt, lobbyArt, floorHeight: FLOOR_HEIGHT, baseWidth: BASE_WIDTH,
       dropDistance: DROP_DISTANCE, effectMs: PERFECT_EFFECT_MS,
     });
+    sceneDirty = true;
     canvas3d.hidden = false;
     gameSurface.dataset.renderer = '3d';
   } catch {
@@ -592,6 +613,7 @@ function frame(now) {
   }
   if (perfectEffect && now - perfectEffect.started >= PERFECT_EFFECT_MS) {
     perfectEffect = null;
+    sceneDirty = true;
     feedback.textContent = '';
   }
   if (width && height) render(now);
@@ -609,6 +631,7 @@ document.addEventListener('keydown', (event) => {
 new ResizeObserver(resize).observe(canvas);
 canvas3d.addEventListener('webglcontextlost', () => {
   renderer3d = null;
+  sceneDirty = true;
   canvas3d.hidden = true;
   gameSurface.dataset.renderer = '2d';
 });
@@ -620,7 +643,7 @@ const rendererReady = enable3d();
 requestAnimationFrame(frame);
 if (nakaLaunch) {
   setPhase('room', 'WAITING');
-  const waitForArt = Promise.allSettled([...SITES.map(site => site.image), floorArt, lobbyArt]
+  const waitForArt = Promise.allSettled([activeSite.image, floorArt, lobbyArt]
     .map(image => image.decode?.()));
   void Promise.race([Promise.all([rendererReady, waitForArt]), new Promise(resolve => setTimeout(resolve, 5000))])
     .then(() => {

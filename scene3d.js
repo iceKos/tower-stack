@@ -87,6 +87,29 @@ export function createTowerScene(canvas, { floorArt, lobbyArt, floorHeight, base
     return mesh;
   }
 
+  function batchCraneParts(group) {
+    const batches = new Map();
+    for (const part of group.children) {
+      const key = part.material.id + ':' + part.castShadow;
+      if (!batches.has(key)) batches.set(key, []);
+      batches.get(key).push(part);
+    }
+    for (const parts of batches.values()) {
+      if (parts.length < 2) continue;
+      const first = parts[0];
+      const batch = new THREE.InstancedMesh(cube, first.material, parts.length);
+      batch.castShadow = first.castShadow;
+      batch.receiveShadow = first.receiveShadow;
+      for (const [index, part] of parts.entries()) {
+        part.updateMatrix();
+        batch.setMatrixAt(index, part.matrix);
+      }
+      batch.instanceMatrix.needsUpdate = true;
+      group.remove(...parts);
+      group.add(batch);
+    }
+  }
+
   const foundation = new THREE.Group();
   scene.add(foundation);
   block(foundation, concrete, 0, -2, 0, baseWidth * 1.3, 6, depth + 20, true);
@@ -166,6 +189,7 @@ export function createTowerScene(canvas, { floorArt, lobbyArt, floorHeight, base
   block(beam, darkGlass, mastX + 1, -26, mastZ + 36, 31, 16, 2);
   block(beam, stone, -328, -12, mastZ, 31, 29, 29, true);
   block(beam, stone, -308, -12, mastZ, 12, 23, 29);
+  batchCraneParts(beam);
   const trolley = block(beam, steel, 0, -13, mastZ + 13, 25, 11, 35);
   const hook = block(scene, steel, 0, 0, 0, 14, 10, 10);
   const cables = Array.from({ length: 3 }, () => block(scene, cableMaterial, 0, 0, 0, 1, 1, 1));
@@ -182,6 +206,7 @@ export function createTowerScene(canvas, { floorArt, lobbyArt, floorHeight, base
       rod(bay, steel, [half, 1, z], [-half, 25, z], 2.6);
     }
     block(bay, beamTrim, 0, 25, 0, mastSize + 2, 2.4, mastSize + 2);
+    batchCraneParts(bay);
     crew.add(bay);
     return bay;
   }
@@ -247,7 +272,7 @@ export function createTowerScene(canvas, { floorArt, lobbyArt, floorHeight, base
       showGuide, scraps, effect, reduced, now } = frame;
     const pixelRatio = Math.min(devicePixelRatio || 1, 1.5);
     if (width !== prevW || height !== prevH || pixelRatio !== prevRatio) {
-      renderer.setPixelRatio(pixelRatio);
+      if (pixelRatio !== prevRatio) renderer.setPixelRatio(pixelRatio);
       renderer.setSize(width, height, false);
       prevW = width; prevH = height; prevRatio = pixelRatio;
     }
@@ -264,13 +289,17 @@ export function createTowerScene(canvas, { floorArt, lobbyArt, floorHeight, base
     }
 
     const focusY = lift + (baseline - height / 2) / scale;
-    camera.left = -width / (2 * scale);
-    camera.right = -camera.left;
-    camera.top = height / (2 * scale);
-    camera.bottom = -camera.top;
+    const halfWidth = width / (2 * scale);
+    const halfHeight = height / (2 * scale);
+    if (camera.right !== halfWidth || camera.top !== halfHeight) {
+      camera.left = -halfWidth;
+      camera.right = halfWidth;
+      camera.top = halfHeight;
+      camera.bottom = -halfHeight;
+      camera.updateProjectionMatrix();
+    }
     camera.position.set(204, focusY + 150, 1360);
     camera.lookAt(0, focusY, 0);
-    camera.updateProjectionMatrix();
 
     foundation.visible = lift < 140;
     ground.visible = lift < 130;

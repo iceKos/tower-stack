@@ -168,8 +168,9 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
         cards.set(player.seat, card);
       }
       const displayed = room.phase === 'finished' ? player.total : player.floors;
-      card.count.textContent = displayed;
-      card.note.textContent = player.left ? 'Left' : !player.online ? 'Offline' : room.phase === 'finished' ? 'Total floors' : player.done ? 'Finished' : 'Floors';
+      const note = player.left ? 'Left' : !player.online ? 'Offline' : room.phase === 'finished' ? 'Total floors' : player.done ? 'Finished' : 'Floors';
+      if (card.count.textContent !== String(displayed)) card.count.textContent = displayed;
+      if (card.note.textContent !== note) card.note.textContent = note;
       if (card.round === room.round && card.floors === player.floors) continue;
       const animate = card.round === room.round && player.floors === card.floors + 1 && !reducedMotion.matches;
       card.round = room.round;
@@ -231,7 +232,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
     clearTimeout(reconnectTimer);
     stream?.close();
     const active = session;
-    const events = new EventSource('./events?' + new URLSearchParams({ code: active.code, token: active.token }));
+    const events = new EventSource('./events?' + new URLSearchParams({ code: active.code, token: active.token, format: 'delta' }));
     stream = events;
     function receive(next, recovery = null) {
       if (session !== active) return;
@@ -270,6 +271,23 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
       receive(restored.room, restored);
     });
     events.onmessage = event => receive(JSON.parse(event.data));
+    events.addEventListener('progress', event => {
+      if (session !== active || stream !== events) return;
+      const { round, seat, floors, done, story } = JSON.parse(event.data);
+      const player = room?.players.find(member => member.seat === seat);
+      if (!player || room.phase !== 'round' || room.round !== round
+        || floors !== player.floors + (story ? 1 : 0)) {
+        subscribe();
+        return;
+      }
+      player.floors = floors;
+      player.done = done;
+      if (story) {
+        player.stories.push(story);
+        if (player.stories.length > stackRules.visibleStories) player.stories.shift();
+      }
+      if (seat !== active.seat) renderRivals();
+    });
     events.addEventListener('replaced', () => {
       if (session !== active) return;
       reset(false);

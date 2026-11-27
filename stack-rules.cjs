@@ -6,6 +6,7 @@ const stackRules = (() => {
   const floorHeight = 44;
   const baseWidth = 348;
   const dropMs = 210;
+  const visibleStories = 18;
   const foundation = { x: -baseWidth / 2, width: baseWidth, artLeft: 0 };
 
   function nextFloor(tower, round) {
@@ -39,7 +40,7 @@ const stackRules = (() => {
     ];
   }
 
-  return { roundCount, roundMs, floorHeight, baseWidth, dropMs, foundation, nextFloor, positionAt, land, encodeStory };
+  return { roundCount, roundMs, floorHeight, baseWidth, dropMs, visibleStories, foundation, nextFloor, positionAt, land, encodeStory };
 })();
 
 if (typeof module !== 'undefined') module.exports = stackRules;
