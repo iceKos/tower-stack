@@ -20,6 +20,7 @@ const floorsLabel = document.querySelector('#floors');
 const roundLabel = document.querySelector('#round');
 const siteName = document.querySelector('#site-name');
 const timer = document.querySelector('#timer');
+const matchTotalLabel = document.querySelector('#match-total');
 const bestLabel = document.querySelector('#best');
 const feedback = document.querySelector('#feedback');
 const audio = createTowerAudio(document.querySelector('#sound'));
@@ -76,7 +77,11 @@ function readBest() {
   }
 }
 
-function saveBest() {
+function recordBest(score) {
+  const saved = readBest();
+  best = Math.max(best, saved, score);
+  bestLabel.textContent = `PERSONAL BEST ${best}`;
+  if (best <= saved) return;
   try {
     localStorage.setItem('tower-stack-best', String(best));
   } catch {
@@ -93,9 +98,9 @@ function setPhase(next, buttonText, instructions = '') {
   gameSurface.classList.toggle('solo-playing', !partyRoom && ['moving', 'dropping'].includes(next));
 }
 
-function updateFloors() {
-  const count = tower.length - 1;
+function updateFloors(count = tower.length - 1, matchTotal = total + count) {
   floorsLabel.textContent = `YOU · ${count} ${count === 1 ? 'FLOOR' : 'FLOORS'}`;
+  matchTotalLabel.textContent = `MATCH TOTAL ${matchTotal}`;
 }
 
 function reportPartyFloor(done = false) {
@@ -257,17 +262,13 @@ function endRound(reason, cue = 'finish') {
   }
   total += count;
   const final = round === ROUND_COUNT;
-  if (final && total > best) {
-    best = total;
-    saveBest();
-    bestLabel.textContent = `BEST ${best}`;
-  }
+  if (final) recordBest(total);
   falling = null;
   perfectEffect = null;
   feedback.textContent = '';
   summaryTitle.textContent = final ? 'Tower complete!' : reason;
   summaryScore.textContent = `${count} ${count === 1 ? 'floor' : 'floors'} this round`;
-  summaryTotal.textContent = final ? `${total} total · Best ${best}` : `${total} total so far`;
+  summaryTotal.textContent = final ? `${total} total · Personal best ${best}` : `${total} total so far`;
   summary.hidden = false;
   setPhase('summary', final ? 'PLAY AGAIN' : 'NEXT ROUND');
   summary.focus({ preventScroll: true });
@@ -311,6 +312,11 @@ function updateParty(next, seat, recovery) {
     return;
   }
   if (next.phase === 'lobby') {
+    if (previous?.phase !== 'lobby') {
+      round = 1;
+      total = 0;
+      prepareRound(now);
+    }
     setPhase('room', 'WAITING');
     return;
   }
@@ -320,6 +326,7 @@ function updateParty(next, seat, recovery) {
     return;
   }
   const newRound = next.round !== previous?.round;
+  if (next.phase === 'round') total = player.total;
   if (newRound && next.round > 0) {
     round = next.round;
     prepareRound(now);
@@ -356,6 +363,7 @@ function updateParty(next, seat, recovery) {
     action.focus({ preventScroll: true });
   } else if (next.phase === 'between') {
     falling = null;
+    updateFloors(player.floors, player.total);
     summaryTitle.textContent = 'Round complete!';
     summaryScore.textContent = `${player.floors} floors this round`;
     summaryTotal.textContent = `${player.total} total · Next round starts shortly`;
@@ -363,9 +371,11 @@ function updateParty(next, seat, recovery) {
     setPhase('party-wait', 'WAITING');
   } else if (next.phase === 'finished' && previous?.phase !== 'finished') {
     falling = null;
+    updateFloors(player.floors, player.total);
+    if (!player.left) recordBest(player.total);
     summaryTitle.textContent = 'Match complete!';
     summaryScore.textContent = `You placed ${player.total} floors`;
-    summaryTotal.textContent = '';
+    summaryTotal.textContent = `Personal best ${best}`;
     const finished = next.players.filter(member => !member.left).sort((a, b) => b.total - a.total);
     const departed = next.players.filter(member => member.left).sort((a, b) => b.total - a.total);
     let rank = 1;
@@ -636,7 +646,7 @@ canvas3d.addEventListener('webglcontextlost', () => {
   gameSurface.dataset.renderer = '2d';
 });
 
-bestLabel.textContent = `BEST ${best}`;
+bestLabel.textContent = `PERSONAL BEST ${best}`;
 prepareRound(performance.now());
 resize();
 const rendererReady = enable3d();
