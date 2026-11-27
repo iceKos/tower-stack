@@ -86,7 +86,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
   }
 
   async function command(data) {
-    const response = await fetch('/party', {
+    const response = await fetch('./party', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -231,7 +231,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
     clearTimeout(reconnectTimer);
     stream?.close();
     const active = session;
-    const events = new EventSource('/events?' + new URLSearchParams({ code: active.code, token: active.token }));
+    const events = new EventSource('./events?' + new URLSearchParams({ code: active.code, token: active.token }));
     stream = events;
     function receive(next, recovery = null) {
       if (session !== active) return;
@@ -332,7 +332,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
       reset();
       showLaunchMessage('Returning to the Naka Lite lobby…');
       if (active && phase !== 'cancelled' && phase !== 'finished') {
-        void fetch('/party', {
+        void fetch('./party', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...credentials(active), type: 'leave' }), keepalive: true,
         }).catch(() => {});
