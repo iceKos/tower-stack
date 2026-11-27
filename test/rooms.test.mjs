@@ -142,6 +142,13 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
   localStreams[1].close();
   localStreams[1] = await listen(local[1]);
   assert.deepEqual(localStreams[1].resume.room.players[0].stories.at(-1), shape);
+  await pause(Math.max(0, localMatch.start + 420 - Date.now()));
+  for (const floors of [2, 3]) {
+    await command({ ...soloHost, type: 'progress', round: 1, floors, shape });
+  }
+  const localCombo = await until(() => localStreams[0].room.players[0], player => player.floors === 3);
+  assert.equal(localCombo.streak, 2);
+  assert.equal(localCombo.bonus, 1);
   localStreams.forEach(stream => stream.close());
 
   const launch = (launchToken, sessionId = 'six-players', status = 200) =>
@@ -164,11 +171,14 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
 
   for (let round = 1; round <= 3; round++) {
     const room = await until(() => streams[0].room, state => state.phase === 'round' && state.round === round);
+    assert.equal(room.players[0].bonus, 0);
+    assert.equal(room.players[0].streak, 0);
     await Promise.all(players.slice(0, 5).map(async (player, seat) => {
       let floor = 1;
       let nextAt = room.start;
       while (!streams[seat].room.players[seat].done && floor <= 6) {
-        const elapsed = seat === 0 && floor === 1 ? Math.floor((2300 - (round - 1) * 75) / 2) : 8;
+        const centered = seat === 0 && (floor === 1 || (round === 1 && floor === 2));
+        const elapsed = centered ? Math.floor((2300 - (floor - 1) * 48 - (round - 1) * 75) / 2) : 8;
         const delayedAtHarbor = seat === 0 && round === 2 && floor === 1;
         const drop = { ...player, type: 'drop', round, floor, elapsed };
         await pause(Math.max(0, nextAt + elapsed - Date.now() + (delayedAtHarbor ? 300 : 5)));
@@ -182,11 +192,13 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
           assert.ok(Math.abs(placed.x + 174) < 1, 'the server lands the floor at the centered input frame');
           assert.equal(placed.nextAt, nextAt + elapsed + 210);
         }
-        if (round === 1 && floor === 1 && seat === 0) {
+        if (round === 1 && floor === 2 && seat === 0) {
           assert.deepEqual(await command(drop), placed);
           streams[seat].close();
           streams[seat] = await listen(player);
-          assert.equal(streams[seat].resume.tower.length, 2);
+          assert.equal(streams[seat].resume.tower.length, 3);
+          assert.equal(streams[seat].resume.room.players[seat].streak, 2);
+          assert.equal(streams[seat].resume.room.players[seat].bonus, 1);
           assert.equal(streams[seat].resume.nextAt, placed.nextAt);
         }
         await until(() => streams[seat].room.players[seat], state => state.floors === floor || state.done);
@@ -206,7 +218,7 @@ test('six-player standalone and verified Naka Lite rooms', { timeout: 45_000 }, 
   assert.deepEqual(rankings.map(player => player.userId), roster.map(player => player.userId));
   assert.equal(rankings[0].rank, 1);
   assert.equal(rankings[5].rank, 6);
-  assert.equal(rankings[0].score, 9);
+  assert.equal(rankings[0].score, 11);
   assert.deepEqual(rankings.slice(1, 5).map(player => player.rank), [2, 2, 2, 2]);
   assert.deepEqual(await until(async () => JSON.parse(await readFile(pending, 'utf8')), jobs => !jobs.length), []);
 });

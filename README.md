@@ -43,7 +43,7 @@ In Naka Lite Admin set the **Game address** to the Render HTTPS URL and set **Pl
 
 The ranked match uses a single HTTP request per drop. The falling floor starts from the last displayed position. The server checks whether that animation frame is within 500 ms of receipt, computes floor overlap from the accepted time, and sends live tower previews over SSE. A disconnected player can resume their seat while the server remains running. The clock keeps running and ranked drops need a connection.
 
-Score is the total number of floors placed across three rounds. Higher totals place first, ties share a rank, and players who leave are placed below finishers. The server sends both rank and score for every roster member, including departures. The game shows the scores in its standings and Naka Lite controls its own result card and rewards.
+Each placed floor is worth one point. The second and every subsequent consecutive Perfect in the same round earns one bonus point. A non-Perfect drop or a new round resets the streak. Earned points carry across all three rounds. The HUD keeps the round's floor count distinct from the match score and local personal best. Higher scores place first, ties share a rank, and players who leave are placed below finishers. The server sends rank and score for every roster member, including departures. Naka Lite controls its own result card and rewards.
 
 Unsent results are written to disk and retried after temporary failures. Render Free is suitable for staging with a single instance. A restart clears active rooms, and recovering unsent results across deploys requires a persistent disk with `NAKA_PENDING_FILE` pointed at it.
 

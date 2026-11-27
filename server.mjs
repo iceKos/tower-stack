@@ -60,8 +60,8 @@ function snapshot(room) {
   return {
     code: room.code, phase: room.phase, round: room.round, now: Date.now(),
     start: room.start, end: room.end, host: room.host, naka: Boolean(room.sessionId),
-    players: room.players.map(({ seat, name, floors, total, done, left, stream, stories }) => ({
-      seat, name, floors, total, done, left, stories: stories.slice(-visibleStories), online: Boolean(stream),
+    players: room.players.map(({ seat, name, floors, total, streak, bonus, done, left, stream, stories }) => ({
+      seat, name, floors, total, streak, bonus, done, left, stories: stories.slice(-visibleStories), online: Boolean(stream),
     })),
   };
 }
@@ -101,6 +101,7 @@ function startRound(room) {
   room.startedAt ??= room.start;
   for (const player of room.players) {
     player.floors = 0;
+    player.streak = player.bonus = 0;
     player.stories = [foundation];
     player.done = player.left;
     if (room.sessionId) {
@@ -117,7 +118,7 @@ function finishRound(room) {
   if (room.phase !== 'round') return;
   clearTimeout(room.timer);
   for (const player of room.players) {
-    player.total += player.floors;
+    player.total += player.floors + player.bonus;
     player.done = true;
   }
   const activePlayers = room.players.filter(player => !player.left).length;
@@ -173,7 +174,7 @@ function createRoom() {
 }
 
 function makePlayer(seat, name) {
-  return { seat, name, token: randomBytes(24).toString('base64url'), floors: 0, total: 0, done: false,
+  return { seat, name, token: randomBytes(24).toString('base64url'), floors: 0, total: 0, streak: 0, bonus: 0, done: false,
     stories: [foundation], left: false, seen: Date.now() };
 }
 
@@ -259,7 +260,8 @@ function dropNaka(room, player, body, response) {
   }
   const motion = stackRules.nextFloor(player.tower, round);
   const x = stackRules.positionAt(motion, elapsed);
-  const { story } = stackRules.land(player.tower.at(-1), x);
+  const { story, perfect } = stackRules.land(player.tower.at(-1), x);
+  Object.assign(player, stackRules.advanceCombo(player, perfect));
   const shape = story && stackRules.encodeStory(story);
   if (story) {
     player.tower.push(story);
@@ -338,10 +340,12 @@ async function command(request, response) {
         return send(response, 400, { error: 'Invalid tower shape.' });
       }
       player.stories.push(shape);
+      Object.assign(player, stackRules.advanceCombo(player, body.shape != null && stackRules.isFullWidth(previous, shape)));
       addedStory = shape;
     }
     player.floors = body.floors;
     player.done = body.done === true;
+    if (player.done) player.streak = 0;
     room.updated = now;
     checkRound(room, player, addedStory);
   } else if (body.type === 'leave') {

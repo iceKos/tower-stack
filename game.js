@@ -34,6 +34,7 @@ const partyResults = document.querySelector('#party-results');
 let best = readBest();
 let round = 1;
 let total = 0;
+let combo = { streak: 0, bonus: 0 };
 let deadline = 0;
 let phase = 'ready';
 let tower;
@@ -98,7 +99,7 @@ function setPhase(next, buttonText, instructions = '') {
   gameSurface.classList.toggle('solo-playing', !partyRoom && ['moving', 'dropping'].includes(next));
 }
 
-function updateFloors(count = tower.length - 1, matchTotal = total + count) {
+function updateFloors(count = tower.length - 1, matchTotal = total + count + combo.bonus) {
   floorsLabel.textContent = `YOU · ${count} ${count === 1 ? 'FLOOR' : 'FLOORS'}`;
   matchTotalLabel.textContent = `MATCH TOTAL ${matchTotal}`;
 }
@@ -133,6 +134,7 @@ function prepareRound(now) {
   gameSurface.dataset.site = activeSite.id;
   siteName.textContent = activeSite.name;
   tower = [stackRules.foundation];
+  combo = { streak: 0, bonus: 0 };
   camera = 0;
   scraps = [];
   falling = null;
@@ -217,6 +219,7 @@ function settleFloor(now) {
   const top = tower.at(-1);
   const { x, width: floorWidth, artLeft, y, nextAt } = falling;
   const { story, left, right, perfect } = stackRules.land(top, x);
+  combo = stackRules.advanceCombo(combo, perfect);
   if (!story) {
     scraps.push({ x, width: floorWidth, artLeft, y, started: now, direction: Math.sign(x - top.x) });
     endRound('Missed the tower!', 'miss');
@@ -226,18 +229,21 @@ function settleFloor(now) {
   tower.push(story);
   audio.play(perfect ? 'perfect' : 'land');
   if (perfect) {
-    feedback.textContent = 'PERFECT!';
+    feedback.textContent = combo.streak >= 2 ? `PERFECT ×${combo.streak} · +1 BONUS` : 'PERFECT!';
     perfectEffect = { x: top.x, y: -y - FLOOR_HEIGHT, width: top.width, started: now };
-  } else if (!reduceMotion.matches) {
-    const direction = x < top.x ? -1 : 1;
-    scraps.push({
-      x: direction < 0 ? x : right,
-      width: Math.abs(x - top.x),
-      artLeft: direction < 0 ? artLeft : artLeft + right - x,
-      y,
-      started: now,
-      direction,
-    });
+  } else {
+    feedback.textContent = '';
+    if (!reduceMotion.matches) {
+      const direction = x < top.x ? -1 : 1;
+      scraps.push({
+        x: direction < 0 ? x : right,
+        width: Math.abs(x - top.x),
+        artLeft: direction < 0 ? artLeft : artLeft + right - x,
+        y,
+        started: now,
+        direction,
+      });
+    }
   }
   falling = null;
   updateFloors();
@@ -260,14 +266,14 @@ function endRound(reason, cue = 'finish') {
     showPartyWait(reason, count);
     return;
   }
-  total += count;
+  total += count + combo.bonus;
   const final = round === ROUND_COUNT;
   if (final) recordBest(total);
   falling = null;
   perfectEffect = null;
   feedback.textContent = '';
   summaryTitle.textContent = final ? 'Tower complete!' : reason;
-  summaryScore.textContent = `${count} ${count === 1 ? 'floor' : 'floors'} this round`;
+  summaryScore.textContent = roundScoreText(count);
   summaryTotal.textContent = final ? `${total} total · Personal best ${best}` : `${total} total so far`;
   summary.hidden = false;
   setPhase('summary', final ? 'PLAY AGAIN' : 'NEXT ROUND');
@@ -279,16 +285,30 @@ function showPartyWait(reason, count) {
   perfectEffect = null;
   feedback.textContent = '';
   summaryTitle.textContent = reason;
-  summaryScore.textContent = `${count} ${count === 1 ? 'floor' : 'floors'} this round`;
+  summaryScore.textContent = roundScoreText(count);
   summaryTotal.textContent = 'Waiting for the other builders…';
   summary.hidden = false;
   setPhase('party-wait', 'WAITING');
 }
 
-function restoreTower(recovery, now) {
+function roundScoreText(count, bonus = combo.bonus) {
+  const floors = `${count} ${count === 1 ? 'floor' : 'floors'} this round`;
+  return bonus ? `${floors} · +${bonus} combo bonus` : floors;
+}
+
+function restoreTower(recovery, player, now) {
+  combo = { streak: player.streak ?? 0, bonus: player.bonus ?? 0 };
+  if (recovery.tower) {
+    tower = recovery.tower;
+    updateFloors();
+    nextFloor(now);
+    return;
+  }
   const source = [...recovery.stories];
   for (const entry of recovery.queue) {
-    if (entry.round === round && entry.floors === source.length && Array.isArray(entry.shape)) source.push(entry.shape);
+    if (entry.round !== round || entry.floors !== source.length || !Array.isArray(entry.shape)) continue;
+    combo = stackRules.advanceCombo(combo, stackRules.isFullWidth(source.at(-1), entry.shape));
+    source.push(entry.shape);
   }
   tower = source.map(([left, right, artLeft = left]) => ({
     x: (left / 1000 - 0.5) * BASE_WIDTH,
@@ -330,7 +350,7 @@ function updateParty(next, seat, recovery) {
   if (newRound && next.round > 0) {
     round = next.round;
     prepareRound(now);
-    if (recovery) restoreTower(recovery, now);
+    if (recovery && next.phase !== 'round') restoreTower(recovery, player, now);
   }
   if (next.phase === 'round' && (newRound || (next.naka && recovery))) {
     partyStart = now + (next.start - next.now);
@@ -341,10 +361,8 @@ function updateParty(next, seat, recovery) {
       deadline = partyEnd;
       sceneDirty = true;
       loadSite(SITES[round]);
-      if (recovery?.tower) {
-        tower = recovery.tower;
-        updateFloors();
-        nextFloor(now + recovery.nextAt - next.now);
+      if (recovery) {
+        restoreTower(recovery, player, recovery.tower ? now + recovery.nextAt - next.now : now);
         falling = null;
         summary.hidden = true;
       }
@@ -365,7 +383,7 @@ function updateParty(next, seat, recovery) {
     falling = null;
     updateFloors(player.floors, player.total);
     summaryTitle.textContent = 'Round complete!';
-    summaryScore.textContent = `${player.floors} floors this round`;
+    summaryScore.textContent = roundScoreText(player.floors, player.bonus ?? 0);
     summaryTotal.textContent = `${player.total} total · Next round starts shortly`;
     summary.hidden = false;
     setPhase('party-wait', 'WAITING');
@@ -374,7 +392,7 @@ function updateParty(next, seat, recovery) {
     updateFloors(player.floors, player.total);
     if (!player.left) recordBest(player.total);
     summaryTitle.textContent = 'Match complete!';
-    summaryScore.textContent = `You placed ${player.total} floors`;
+    summaryScore.textContent = `You scored ${player.total} ${player.total === 1 ? 'point' : 'points'}`;
     summaryTotal.textContent = `Personal best ${best}`;
     const finished = next.players.filter(member => !member.left).sort((a, b) => b.total - a.total);
     const departed = next.players.filter(member => member.left).sort((a, b) => b.total - a.total);
@@ -382,7 +400,7 @@ function updateParty(next, seat, recovery) {
     partyResults.replaceChildren(...[...finished, ...departed].map((member, index) => {
       if (index && member.total !== finished[index - 1]?.total) rank = index + 1;
       const row = document.createElement('li');
-      row.textContent = `${member.left ? 'Left' : rank + '.'} ${member.name} · ${member.total}`;
+      row.textContent = `${member.left ? 'Left' : rank + '.'} ${member.name} · ${member.total} pts`;
       return row;
     }));
     partyResults.hidden = false;

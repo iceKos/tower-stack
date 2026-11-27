@@ -40,7 +40,17 @@ const stackRules = (() => {
     ];
   }
 
-  return { roundCount, roundMs, floorHeight, baseWidth, dropMs, visibleStories, foundation, nextFloor, positionAt, land, encodeStory };
+  function advanceCombo({ streak, bonus }, perfect) {
+    const nextStreak = perfect ? streak + 1 : 0;
+    return { streak: nextStreak, bonus: bonus + (nextStreak >= 2 ? 1 : 0) };
+  }
+
+  function isFullWidth(previous, shape) {
+    return shape[0] === previous[0] && shape[1] === previous[1];
+  }
+
+  return { roundCount, roundMs, floorHeight, baseWidth, dropMs, visibleStories, foundation, nextFloor, positionAt, land,
+    encodeStory, advanceCombo, isFullWidth };
 })();
 
 if (typeof module !== 'undefined') module.exports = stackRules;

@@ -168,7 +168,7 @@ function createTowerParty(onRoom, primeAudio, floorArt, lobbyArt) {
         cards.set(player.seat, card);
       }
       const displayed = room.phase === 'finished' ? player.total : player.floors;
-      const note = player.left ? 'Left' : !player.online ? 'Offline' : room.phase === 'finished' ? 'Total floors' : player.done ? 'Finished' : 'Floors';
+      const note = player.left ? 'Left' : !player.online ? 'Offline' : room.phase === 'finished' ? 'Total points' : player.done ? 'Finished' : 'Floors';
       if (card.count.textContent !== String(displayed)) card.count.textContent = displayed;
       if (card.note.textContent !== note) card.note.textContent = note;
       if (card.round === room.round && card.floors === player.floors) continue;
